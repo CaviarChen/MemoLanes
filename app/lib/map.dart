@@ -154,8 +154,8 @@ class MapUiBodyState extends State<MapUiBody> {
           // State: 1.Display_location_and_camera_tracking / 2.Display_location_only / 3.Off.
           // The button will toggle between 1/2 -> 3 or 3 -> 1.
           // When user touched the map, then the state will stay as 3 or change from 3 to 2.
-          center: Point(coordinates: Position(-80.1263, 25.7845)).toJson(),
-          zoom: 12.0),
+          center: Point(coordinates: Position(114.1694, 22.3193)).toJson(),
+          zoom: 10.0),
     )));
   }
 }

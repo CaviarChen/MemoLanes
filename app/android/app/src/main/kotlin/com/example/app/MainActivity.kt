@@ -1,4 +1,4 @@
-package io.eightbits.projectdv.dev.x0
+package com.memolanes.dev.dogfood
 
 import io.flutter.embedding.android.FlutterActivity
 
