@@ -1,21 +1,44 @@
+﻿import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:project_dv/src/rust/api/api.dart';
-import 'dart:async';
+import 'package:geolocator/geolocator.dart' as geolocator;
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
-import 'package:project_dv/token.dart';
+import 'package:memolanes/src/rust/api/api.dart';
+import 'package:memolanes/token.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:json_annotation/json_annotation.dart';
+
+part 'map.g.dart';
+
+enum TrackingMode {
+  displayAndTracking,
+  displayOnly,
+  off,
+}
+
+// TODO: `dart run build_runner build` is needed for generating `map.g.dart`,
+// we should automate this.
+@JsonSerializable()
+class MapState {
+  MapState(this.trackingMode, this.zoom, this.lng, this.lat, this.bearing);
+
+  TrackingMode trackingMode;
+  double zoom;
+  double lng;
+  double lat;
+  double bearing;
+
+  factory MapState.fromJson(Map<String, dynamic> json) =>
+      _$MapStateFromJson(json);
+  Map<String, dynamic> toJson() => _$MapStateToJson(this);
+}
 
 class MapUiBody extends StatefulWidget {
   const MapUiBody({super.key});
 
   @override
   State<StatefulWidget> createState() => MapUiBodyState();
-}
-
-enum TrackingMode {
-  displayAndTracking,
-  displayOnly,
-  off,
 }
 
 extension PuckPosition on StyleManager {
@@ -31,9 +54,10 @@ extension PuckPosition on StyleManager {
   }
 }
 
-class MapUiBodyState extends State<MapUiBody> {
+class MapUiBodyState extends State<MapUiBody> with WidgetsBindingObserver {
   static const String overlayLayerId = "overlay-layer";
   static const String overlayImageSourceId = "overlay-image-source";
+  static const String mainMapStatePrefsKey = "MainMap.mapState";
 
   MapUiBodyState() {
     // TODO: Kinda want the default implementation is maplibre instead of mapbox.
@@ -45,9 +69,11 @@ class MapUiBodyState extends State<MapUiBody> {
   MapboxMap? mapboxMap;
   bool layerAdded = false;
   Completer? requireRefresh = Completer();
-  Timer? timer;
+  Timer? refreshTimer;
   Timer? trackTimer;
   TrackingMode trackingMode = TrackingMode.displayAndTracking;
+
+  CameraOptions? _initialCameraOptions;
 
   Future<void> _doActualRefresh() async {
     var mapboxMap = this.mapboxMap;
@@ -58,8 +84,8 @@ class MapUiBodyState extends State<MapUiBody> {
     final coordinateBounds = await mapboxMap.coordinateBoundsForCamera(
         CameraOptions(
             center: cameraState.center, zoom: zoom, pitch: cameraState.pitch));
-    final northeast = coordinateBounds.northeast['coordinates'] as List;
-    final southwest = coordinateBounds.southwest['coordinates'] as List;
+    final northeast = coordinateBounds.northeast.coordinates;
+    final southwest = coordinateBounds.southwest.coordinates;
 
     final left = southwest[0];
     final top = northeast[1];
@@ -68,10 +94,10 @@ class MapUiBodyState extends State<MapUiBody> {
 
     final renderResult = await renderMapOverlay(
       zoom: zoom,
-      left: left,
-      top: top,
-      right: right,
-      bottom: bottom,
+      left: left!.toDouble(),
+      top: top!.toDouble(),
+      right: right!.toDouble(),
+      bottom: bottom!.toDouble(),
     );
 
     if (renderResult != null) {
@@ -86,6 +112,8 @@ class MapUiBodyState extends State<MapUiBody> {
           height: renderResult.height,
           data: renderResult.data);
 
+      if (!mounted) return;
+      // TODO: we kinda need transaction to avoid flickering
       if (layerAdded) {
         await Future.wait([
           mapboxMap.style
@@ -108,6 +136,7 @@ class MapUiBodyState extends State<MapUiBody> {
   }
 
   void _refreshLoop() async {
+    _initRefershTimerIfNecessary();
     await resetMapRenderer();
     while (true) {
       await requireRefresh?.future;
@@ -119,33 +148,108 @@ class MapUiBodyState extends State<MapUiBody> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    timer = Timer.periodic(
-        const Duration(seconds: 1),
-            (Timer _) =>
-        // TODO: constantly calling `_triggerRefresh` isn't too bad, becuase
-        // it doesn't do much if nothing is changed. However, this doesn't
-        // mean we couldn't do something better.
-        _triggerRefresh());
-    _refreshLoop();
-  }
-
   void _triggerRefresh() async {
     if (requireRefresh?.isCompleted == false) {
       requireRefresh?.complete();
     }
   }
 
+  // TODO: We don't enough time to save if the app got killed. Losing data here
+  // is fine but we could consider saving every minute or so.
+  void _saveMapState() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    CameraState? cameraState = await mapboxMap?.getCameraState();
+    if (cameraState == null) return;
+    final mapState = MapState(
+      trackingMode,
+      cameraState.zoom,
+      cameraState.center.coordinates.lng.toDouble(),
+      cameraState.center.coordinates.lat.toDouble(),
+      cameraState.bearing,
+    );
+    prefs.setString(mainMapStatePrefsKey, jsonEncode(mapState.toJson()));
+  }
+
+  void _loadMapState() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    MapState? mapState;
+    final mapStateString = prefs.getString(mainMapStatePrefsKey);
+    if (mapStateString != null) {
+      try {
+        mapState = MapState.fromJson(jsonDecode(mapStateString));
+      } catch (_) {
+        // best effort
+      }
+    }
+
+    var cameraOptions = CameraOptions();
+
+    if (mapState != null) {
+      trackingMode = mapState.trackingMode;
+      cameraOptions.bearing = mapState.bearing;
+      cameraOptions.zoom = mapState.zoom;
+      cameraOptions.center =
+          Point(coordinates: Position(mapState.lng, mapState.lat));
+    } else {
+      geolocator.Position? lastKnownPosition =
+          await geolocator.Geolocator.getLastKnownPosition();
+      if (lastKnownPosition != null) {
+        cameraOptions.zoom = 16;
+        cameraOptions.center = Point(
+            coordinates: Position(
+                lastKnownPosition.longitude, lastKnownPosition.latitude));
+      } else {
+        // nothing we can use, just look at the whole earth
+        cameraOptions.zoom = 2;
+      }
+    }
+
+    setState(() {
+      _initialCameraOptions = cameraOptions;
+    });
+  }
+
+  void _initRefershTimerIfNecessary() {
+    refreshTimer ??= Timer.periodic(const Duration(seconds: 1), (Timer _) {
+      _triggerRefresh();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadMapState();
+    _refreshLoop();
+  }
+
   @override
   void dispose() {
-    timer?.cancel();
+    _saveMapState();
+    WidgetsBinding.instance.removeObserver(this);
+    refreshTimer?.cancel();
+    trackTimer?.cancel();
     if (requireRefresh?.isCompleted == false) {
       requireRefresh?.complete();
     }
     requireRefresh = null;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // TODO: we could consider clean up more resources, especially when
+    // recording. We take the partical wake lock for that.
+    if (state == AppLifecycleState.resumed) {
+      _initRefershTimerIfNecessary();
+      setupTrackingMode();
+    } else if (state == AppLifecycleState.paused) {
+      _saveMapState();
+      refreshTimer?.cancel();
+      refreshTimer = null;
+      trackTimer?.cancel();
+      trackTimer = null;
+    }
   }
 
   _onMapCreated(MapboxMap mapboxMap) async {
@@ -158,19 +262,18 @@ class MapUiBodyState extends State<MapUiBody> {
     _triggerRefresh();
   }
 
-  _onMapScrollListener(ScreenCoordinate coordinate) {
+  _onMapScrollListener(MapContentGestureContext context) {
     if (trackingMode == TrackingMode.displayAndTracking) {
       _triggerRefresh();
       setState(() {
         trackingMode = TrackingMode.displayOnly;
       });
-      updateCamera();
+      setupTrackingMode();
     }
   }
 
   _onMapLoadedListener(MapLoadedEventData data) {
-    _refreshTrackLocation();
-    updateCamera();
+    setupTrackingMode();
   }
 
   _trackingModeButton() async {
@@ -181,67 +284,74 @@ class MapUiBodyState extends State<MapUiBody> {
         trackingMode = TrackingMode.off;
       }
     });
-    await updateCamera();
+    await setupTrackingMode();
   }
 
-  _refreshTrackLocation() async {
-    try {
-      double? zoom;
-      final position = await mapboxMap?.style.getPuckPosition();
-      CameraState? cameraState = await mapboxMap?.getCameraState();
-      if (cameraState != null) {
-        if (cameraState.zoom < 10.5) {
-          zoom = 16.0;
-        }
-      }
-      await mapboxMap?.flyTo(
-          CameraOptions(
-              center: Point(coordinates: position!).toJson(), zoom: zoom),
-          null);
-    } catch (e) {
-      // just best effort
-    }
-  }
-
-  updateCamera() async {
+  setupTrackingMode() async {
     trackTimer?.cancel();
-    if (trackingMode == TrackingMode.displayAndTracking) {
-      trackTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-        _refreshTrackLocation();
-      });
-      await mapboxMap?.location.updateSettings(
-          LocationComponentSettings(enabled: true, pulsingEnabled: true));
-    } else if (trackingMode == TrackingMode.displayOnly) {
-      // nothing to do here, we always get here from `displayAndTracking`.
-    } else if (trackingMode == TrackingMode.off) {
-      await mapboxMap?.location
-          .updateSettings(LocationComponentSettings(enabled: false));
+    LocationComponentSettings locationSettings;
+    switch (trackingMode) {
+      case TrackingMode.displayAndTracking:
+        trackTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+          try {
+            double? zoom;
+            final position = await mapboxMap?.style.getPuckPosition();
+            CameraState? cameraState = await mapboxMap?.getCameraState();
+            if (cameraState != null) {
+              if (cameraState.zoom < 10.5) {
+                zoom = 16.0;
+              }
+            }
+            await mapboxMap?.flyTo(
+                CameraOptions(
+                    center: Point(coordinates: position!), zoom: zoom),
+                null);
+          } catch (e) {
+            // just best effort
+          }
+        });
+        locationSettings =
+            LocationComponentSettings(enabled: true, pulsingEnabled: true);
+        break;
+      case TrackingMode.displayOnly:
+        locationSettings =
+            LocationComponentSettings(enabled: true, pulsingEnabled: true);
+        break;
+      case TrackingMode.off:
+        locationSettings = LocationComponentSettings(enabled: false);
+        break;
     }
+    await mapboxMap?.location.updateSettings(locationSettings);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: (MapWidget(
-        key: const ValueKey("mapWidget"),
-        onMapCreated: _onMapCreated,
-        onCameraChangeListener: _onCameraChangeListener,
-        onScrollListener: _onMapScrollListener,
-        onMapLoadedListener: _onMapLoadedListener,
-        styleUri: MapboxStyles.OUTDOORS,
-      )),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: trackingMode == TrackingMode.displayAndTracking
-            ? Colors.blue
-            : Colors.grey,
-        onPressed: _trackingModeButton,
-        child: Icon(
-          trackingMode == TrackingMode.off
-              ? Icons.near_me_disabled
-              : Icons.near_me,
-          color: Colors.black,
+    if (_initialCameraOptions == null) {
+      return const CircularProgressIndicator();
+    } else {
+      return Scaffold(
+        body: (MapWidget(
+          key: const ValueKey("mapWidget"),
+          onMapCreated: _onMapCreated,
+          onCameraChangeListener: _onCameraChangeListener,
+          onScrollListener: _onMapScrollListener,
+          onMapLoadedListener: _onMapLoadedListener,
+          styleUri: MapboxStyles.OUTDOORS,
+          cameraOptions: _initialCameraOptions,
+        )),
+        floatingActionButton: FloatingActionButton(
+          backgroundColor: trackingMode == TrackingMode.displayAndTracking
+              ? Colors.blue
+              : Colors.grey,
+          onPressed: _trackingModeButton,
+          child: Icon(
+            trackingMode == TrackingMode.off
+                ? Icons.near_me_disabled
+                : Icons.near_me,
+            color: Colors.black,
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 }

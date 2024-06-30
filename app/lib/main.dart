@@ -1,30 +1,69 @@
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:project_dv/archive.dart';
-import 'package:project_dv/gps_page.dart';
-import 'package:project_dv/gps_recording_state.dart';
-import 'package:project_dv/journey.dart';
-import 'package:project_dv/map.dart';
-import 'package:project_dv/raw_data.dart';
-import 'package:project_dv/src/rust/api/api.dart';
-import 'package:project_dv/src/rust/frb_generated.dart';
+import 'package:memolanes/settings.dart';
+import 'package:memolanes/gps_page.dart';
+import 'package:memolanes/gps_recording_state.dart';
+import 'package:memolanes/journey.dart';
+import 'package:memolanes/map.dart';
+import 'package:memolanes/raw_data.dart';
+import 'package:memolanes/src/rust/api/api.dart' as api;
+import 'package:memolanes/src/rust/frb_generated.dart';
 import 'package:provider/provider.dart';
+import 'package:badges/badges.dart' as badges;
 
+void delayedInit() {
+  Future.delayed(const Duration(milliseconds: 2000), () async {
+    DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+    String? manufacturer;
+    String? model;
+    String? systemVersion;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      var androidInfo = await deviceInfo.androidInfo;
+      manufacturer = androidInfo.manufacturer;
+      model = androidInfo.model;
+      systemVersion = androidInfo.version.release;
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      var iosInfo = await deviceInfo.iosInfo;
+      manufacturer = "Apple";
+      model = iosInfo.utsname.machine;
+      systemVersion = iosInfo.systemVersion;
+    }
+
+    PackageInfo packageInfo = await PackageInfo.fromPlatform();
+
+    await api.delayedInit(
+        deviceInfo: api.DeviceInfo(
+            manufacturer: manufacturer,
+            model: model,
+            systemVersion: systemVersion),
+        appInfo: api.AppInfo(
+            packageName: packageInfo.packageName,
+            version: packageInfo.version,
+            buildNumber: packageInfo.buildNumber));
+  });
+}
 
 void main() async {
   // This is required since we are doing things before calling `runApp`.
   WidgetsFlutterBinding.ensureInitialized();
   // TODO: Consider using `flutter_native_splash`
   await RustLib.init();
-  await init(
+  await api.init(
       tempDir: (await getTemporaryDirectory()).path,
       docDir: (await getApplicationDocumentsDirectory()).path,
       supportDir: (await getApplicationSupportDirectory()).path,
       cacheDir: (await getApplicationCacheDirectory()).path);
+  var updateNotifier = UpdateNotifier();
+  delayedInit();
+  var gpsRecordingState = GpsRecordingState();
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (context) => GpsRecordingState()),
+        ChangeNotifierProvider(create: (context) => gpsRecordingState),
+        ChangeNotifierProvider(create: (context) => updateNotifier),
       ],
       child: const MyApp(),
     ),
@@ -86,12 +125,39 @@ class _MyHomePageState extends State<MyHomePage> {
       length: 4,
       child: Scaffold(
           appBar: AppBar(
-            bottom: const TabBar(
+            bottom: TabBar(
               tabs: [
-                Tab(icon: Icon(Icons.home)),
-                Tab(icon: Icon(Icons.map)),
-                Tab(icon: Icon(Icons.archive)),
-                Tab(icon: Icon(Icons.description)),
+                const Tab(icon: Icon(Icons.home)),
+                const Tab(icon: Icon(Icons.map)),
+                Tab(
+                  child: badges.Badge(
+                    badgeStyle: badges.BadgeStyle(
+                      shape: badges.BadgeShape.square,
+                      borderRadius: BorderRadius.circular(5),
+                      padding: const EdgeInsets.all(2),
+                      badgeGradient: const badges.BadgeGradient.linear(
+                        colors: [
+                          Colors.purple,
+                          Colors.blue,
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    position: badges.BadgePosition.topEnd(top: -12, end: -20),
+                    badgeContent: const Text(
+                      'NEW',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold),
+                    ),
+                    showBadge:
+                        context.watch<UpdateNotifier>().hasUpdateNotification(),
+                    child: const Icon(Icons.settings),
+                  ),
+                ),
+                const Tab(icon: Icon(Icons.description)),
               ],
             ),
             title: Text(widget.title),
@@ -111,7 +177,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
               Center(child: JourneyUiBody()),
-              Center(child: ArchiveUiBody()),
+              Center(child: SettingsBody()),
               Center(child: RawDataBody())
             ],
           )),
