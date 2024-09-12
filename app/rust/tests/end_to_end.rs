@@ -71,3 +71,60 @@ fn basic() {
     // try export logs
     api::export_logs("./tests/for_inspection/end_to_end_basic-logs.zip".to_string()).unwrap();
 }
+
+#[test]
+fn out_of_mercator_range() {
+    // We cannot render map for this case but we should be able to record data.
+    let temp_dir = TempDir::new("end_to_end-out_of_mercator_range").unwrap();
+    println!("temp dir: {:?}", temp_dir.path());
+
+    let sub_folder = |sub| {
+        let path = temp_dir.path().join(sub);
+        fs::create_dir(&path).unwrap();
+        path.into_os_string().into_string().unwrap()
+    };
+
+    api::init(
+        sub_folder("temp/"),
+        sub_folder("doc/"),
+        sub_folder("support/"),
+        sub_folder("cache/"),
+    );
+
+    let mut map_renderer_proxy = api::get_map_renderer_proxy_for_main_map();
+
+    let _ = map_renderer_proxy
+        .render_map_overlay(2., -180., 85., 180., -85.)
+        .unwrap();
+
+    let delta = 0.01;
+    let mut lat = 84.5;
+    let mut timestamp = 100000;
+    while lat < 90. {
+        lat = f64::min(lat + delta, 90.);
+        timestamp += 2000;
+        api::on_location_update(
+            vec![RawData {
+                latitude: lat,
+                longitude: 100.,
+                timestamp_ms: None,
+                accuracy: None,
+                altitude: None,
+                speed: None,
+            }],
+            timestamp,
+        );
+    }
+
+    // we have both ongoing journey and finalized journey at this point
+    let render_result = map_renderer_proxy
+        .render_map_overlay(2., -180., 85., 180., -85.)
+        .unwrap();
+    test_utils::assert_image(
+        &render_result.data,
+        "end_to_end-out_of_mercator_range_0",
+        "8fc413214c65b8dce6a77c8a98e64b27afa1f43b",
+    );
+
+    assert!(api::finalize_ongoing_journey().unwrap());
+}
