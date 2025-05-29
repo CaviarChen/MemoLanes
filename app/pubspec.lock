@@ -486,13 +486,12 @@ packages:
     source: hosted
     version: "14.0.1"
   geolocator_android:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
-      path: geolocator_android
-      ref: main
-      resolved-ref: ab7dd6040e35bb815a0466dc622c54ce3d6fe419
-      url: "https://github.com/MemoLanes/flutter-geolocator"
-    source: git
+      name: geolocator_android
+      sha256: "114072db5d1dce0ec0b36af2697f55c133bc89a2c8dd513e137c0afe59696ed4"
+      url: "https://pub.dev"
+    source: hosted
     version: "5.0.1+1"
   geolocator_apple:
     dependency: transitive
