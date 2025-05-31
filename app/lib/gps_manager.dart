@@ -137,7 +137,7 @@ class GpsManager extends ChangeNotifier {
         return AndroidSettings(
           accuracy: accuracy,
           distanceFilter: distanceFilter,
-          forceLocationManager: false,
+          forceLocationManager: true,
           // 1 sec feels like a reasonable interval
           intervalDuration: const Duration(seconds: 1),
           foregroundNotificationConfig:
