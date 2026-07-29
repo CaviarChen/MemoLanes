@@ -131,10 +131,19 @@ fn verify_linked_drawing(root: &Path) {
     );
     assert_eq!(
         session
-            .add_lines(&[(2.0, 2.0), (2.0 + 1e-10, 2.0 + 1e-10)], false)
+            .add_lines(&[(2.0, 2.0), (2.0, 2.0 + 5e-8)], false)
             .unwrap(),
         AddLinesOutcome::Ignored
     );
+    assert!(!session.can_undo());
+
+    assert_eq!(
+        session
+            .add_lines(&[(2.0, 2.0), (2.0, 2.0 + 2e-7)], false)
+            .unwrap(),
+        AddLinesOutcome::Added
+    );
+    session.undo().unwrap();
     assert!(!session.can_undo());
 
     let linked_line = [(0.01, 0.99), (0.99, 0.99)];

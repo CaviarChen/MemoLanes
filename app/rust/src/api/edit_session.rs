@@ -11,8 +11,12 @@ use super::api::{get, MapRendererProxy};
 use crate::renderer::MapRenderer;
 use crate::utils::{get_bounds_from_journey_bitmap, MapBounds};
 
-const EPS: f64 = 1e-12_f64;
-const DEDUP_EPS: f64 = 1e-9_f64;
+const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
+const GEOMETRY_EPS: f64 = 1e-12;
+const INTERSECTION_PARAMETER_EPS: f64 = 1e-9;
+// One centimeter is far below the editor's visible resolution, but filters coordinate noise.
+const ADJACENT_POINT_DEDUP_DISTANCE_METERS: f64 = 0.01;
+const LINK_TARGET_MIN_SEPARATION_METERS: f64 = 0.01;
 const LINK_SNAP_DISTANCE_RATIO_THRESHOLD: f64 = 3.0_f64;
 
 #[frb(opaque)]
@@ -46,31 +50,31 @@ impl EditSession {
         (a - b + 180.0).rem_euclid(360.0) - 180.0
     }
 
-    /// Equirectangular distance in degrees. This is accurate enough for comparing
-    /// nearby editor points, while handling both latitude scaling and ±180°.
+    /// Equirectangular distance in meters. This is accurate enough for nearby
+    /// editor points, while handling both latitude scaling and ±180°.
     fn point_distance(a: &TrackPoint, b: &TrackPoint) -> f64 {
         Self::point_distance_sq(a, b).sqrt()
     }
 
     fn point_distance_sq(a: &TrackPoint, b: &TrackPoint) -> f64 {
-        let lat_delta = a.latitude - b.latitude;
+        let lat_delta = (a.latitude - b.latitude).to_radians();
         let mean_latitude = ((a.latitude + b.latitude) / 2.0).to_radians();
-        let lng_delta = Self::longitude_delta(a.longitude, b.longitude) * mean_latitude.cos();
-        lat_delta * lat_delta + lng_delta * lng_delta
+        let lng_delta =
+            Self::longitude_delta(a.longitude, b.longitude).to_radians() * mean_latitude.cos();
+        (lat_delta * lat_delta + lng_delta * lng_delta) * EARTH_RADIUS_METERS * EARTH_RADIUS_METERS
     }
 
-    fn points_equal(a: &TrackPoint, b: &TrackPoint) -> bool {
-        (a.latitude - b.latitude).abs() < DEDUP_EPS
-            && Self::longitude_delta(a.longitude, b.longitude).abs() < DEDUP_EPS
+    fn points_within_distance(a: &TrackPoint, b: &TrackPoint, distance_meters: f64) -> bool {
+        Self::point_distance_sq(a, b) <= distance_meters * distance_meters
     }
 
     fn dedup_adjacent_track_points(points: Vec<TrackPoint>) -> Vec<TrackPoint> {
         let mut deduped = Vec::with_capacity(points.len());
         for point in points {
-            if deduped
-                .last()
-                .is_some_and(|last| Self::points_equal(last, &point))
-            {
+            let is_duplicate = deduped.last().is_some_and(|last| {
+                Self::points_within_distance(last, &point, ADJACENT_POINT_DEDUP_DISTANCE_METERS)
+            });
+            if is_duplicate {
                 continue;
             }
             deduped.push(point);
@@ -104,7 +108,7 @@ impl EditSession {
             };
 
             consider(&pts[0]);
-            if pts.len() >= 2 && !Self::points_equal(&pts[0], &pts[pts.len() - 1]) {
+            if pts.len() >= 2 {
                 consider(&pts[pts.len() - 1]);
             }
         }
@@ -152,7 +156,11 @@ impl EditSession {
                 return Err(PrepareTrackPointsError::TooFar);
             }
 
-            if Self::points_equal(&snapped_first_pt, &snapped_last_pt) {
+            if Self::points_within_distance(
+                &snapped_first_pt,
+                &snapped_last_pt,
+                LINK_TARGET_MIN_SEPARATION_METERS,
+            ) {
                 return Err(PrepareTrackPointsError::InvalidLinkTargets);
             }
             if seg_first == seg_last {
@@ -228,11 +236,14 @@ impl EditSession {
         let mut hits: Vec<(f64, TrackPoint)> = Vec::new();
 
         let mut push_hit = |t: f64, x: f64, y: f64| {
-            if !(-EPS..=1.0 + EPS).contains(&t) {
+            if !(-GEOMETRY_EPS..=1.0 + GEOMETRY_EPS).contains(&t) {
                 return;
             }
             let t = t.clamp(0.0, 1.0);
-            if hits.iter().any(|(t0, _)| (*t0 - t).abs() < DEDUP_EPS) {
+            if hits
+                .iter()
+                .any(|(t0, _)| (*t0 - t).abs() < INTERSECTION_PARAMETER_EPS)
+            {
                 return;
             }
             hits.push((
@@ -244,21 +255,21 @@ impl EditSession {
             ));
         };
 
-        if dx.abs() > EPS {
+        if dx.abs() > GEOMETRY_EPS {
             for x_edge in [min_lng, max_lng] {
                 let t = (x_edge - x0) / dx;
                 let y = y0 + t * dy;
-                if y >= min_lat - EPS && y <= max_lat + EPS {
+                if y >= min_lat - GEOMETRY_EPS && y <= max_lat + GEOMETRY_EPS {
                     push_hit(t, x_edge, y);
                 }
             }
         }
 
-        if dy.abs() > EPS {
+        if dy.abs() > GEOMETRY_EPS {
             for y_edge in [min_lat, max_lat] {
                 let t = (y_edge - y0) / dy;
                 let x = x0 + t * dx;
-                if x >= min_lng - EPS && x <= max_lng + EPS {
+                if x >= min_lng - GEOMETRY_EPS && x <= max_lng + GEOMETRY_EPS {
                     push_hit(t, x, y_edge);
                 }
             }
@@ -489,7 +500,9 @@ impl EditSession {
                 let (start_lat, start_lng) = window[0];
                 let (end_lat, end_lng) = window[1];
 
-                if (start_lat - end_lat).abs() < EPS && (start_lng - end_lng).abs() < EPS {
+                if (start_lat - end_lat).abs() < GEOMETRY_EPS
+                    && (start_lng - end_lng).abs() < GEOMETRY_EPS
+                {
                     continue;
                 }
 
