@@ -50,6 +50,9 @@ Temporary Items
 .apdisk
 
 ### macOS Patch ###
+# Local build caches kept outside Flutter's app/ directory.
+/.build-cache/
+
 # iCloud generated files
 *.icloud
 

@@ -6,6 +6,25 @@ import 'package:path/path.dart' as path;
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
+    // Cargo's dep-info lists source files, but omits its build configuration.
+    // Track these explicitly so profile/dependency changes invalidate the hook.
+    output.dependencies.addAll([
+      for (final file in [
+        'rust/Cargo.toml',
+        'rust/Cargo.lock',
+        'rust/rust-toolchain.toml',
+        'journey_kernel/Cargo.toml',
+        'rust/geo_data_format/Cargo.toml',
+      ])
+        input.packageRoot.resolve(file),
+    ]);
+    final buildMode = switch (input.userDefines['rust_build_mode']) {
+      null || 'release' => FlutterRustBridgeBuildMode.release,
+      'dev' => FlutterRustBridgeBuildMode.debug,
+      final value => throw ArgumentError(
+        'rust_build_mode must be release or dev, got $value.',
+      ),
+    };
     final cargoEnvironmentVariables = await _cargoEnvironmentVariablesFor(
       input: input,
       output: output,
@@ -13,7 +32,13 @@ void main(List<String> args) async {
 
     await FlutterRustBridgeNativeAssetsBuilder(
       cratePath: 'rust',
-      extraCargoEnvironmentVariables: cargoEnvironmentVariables,
+      buildMode: buildMode,
+      extraCargoEnvironmentVariables: {
+        ...cargoEnvironmentVariables,
+        'MEMOLANES_FAST_BUILD': buildMode == FlutterRustBridgeBuildMode.debug
+            ? '1'
+            : '0',
+      },
     ).run(input: input, output: output);
   });
 }

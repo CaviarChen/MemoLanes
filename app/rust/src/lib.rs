@@ -9,8 +9,9 @@ extern crate lazy_static;
 
 #[rustfmt::skip]
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
-#[rustfmt::skip]
-pub mod build_info;
+pub mod build_info {
+    include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
+}
 
 pub mod achievement;
 pub mod api;

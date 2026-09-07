@@ -3,6 +3,12 @@ use std::path::Path;
 use std::process::Command;
 use std::{fs, io::Write};
 
+fn write_if_changed(file_path: &Path, content: &[u8]) {
+    if fs::read(file_path).map_or(true, |current| current != content) {
+        fs::write(file_path, content).expect("failed to write generated file");
+    }
+}
+
 fn check_and_create_file(file_path: &str, warning_message: &str, content: &str) {
     println!("cargo:rerun-if-changed={file_path}");
     if fs::metadata(file_path).is_err() {
@@ -42,14 +48,20 @@ fn load_env_file() {
 fn main() {
     load_env_file();
 
-    // Do not track the whole .git directory: it can contain Unix sockets.
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
-    let output = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .expect("Failed to execute command");
-    let git_hash = std::str::from_utf8(&output.stdout).unwrap().trim();
+    println!("cargo:rerun-if-env-changed=MEMOLANES_FAST_BUILD");
+    let git_hash = if env::var("MEMOLANES_FAST_BUILD").as_deref() == Ok("1") {
+        // Dart-only commits must not invalidate the native library in this mode.
+        "dev".to_owned()
+    } else {
+        // Do not track the whole .git directory: it can contain Unix sockets.
+        println!("cargo:rerun-if-changed=../../.git/HEAD");
+        println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+        let output = Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .expect("Failed to execute command");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
 
     println!("cargo:rerun-if-env-changed=MAPBOX-ACCESS-TOKEN");
     let mapbox_access_token = match env::var("MAPBOX-ACCESS-TOKEN").ok() {
@@ -63,23 +75,31 @@ pub const SHORT_COMMIT_HASH: &str = \"{git_hash}\";
 pub const MAPBOX_ACCESS_TOKEN: Option<&str> = {mapbox_access_token};
 "
     );
-    let build_info_path = "src/build_info.rs";
-    let build_info_changed =
-        fs::read_to_string(build_info_path).map_or(true, |current| current != build_info);
-    if build_info_changed {
-        fs::write(build_info_path, build_info).unwrap();
-    }
+    // Different targets/profiles must not overwrite one another's build info.
+    let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR must be set by Cargo");
+    let out_dir = Path::new(&out_dir);
+    write_if_changed(&out_dir.join("build_info.rs"), build_info.as_bytes());
 
     // Generate protobuf files
     println!("cargo:rerun-if-changed=src/protos/journey.proto");
     println!("cargo:rerun-if-changed=src/protos/archive.proto");
+    let proto_out = out_dir.join("protos");
+    fs::create_dir_all(&proto_out).unwrap();
     protobuf_codegen::Codegen::new()
         .pure()
-        .out_dir("src/protos")
+        .out_dir(&proto_out)
         .include("src/protos")
         .input("src/protos/journey.proto")
         .input("src/protos/archive.proto")
         .run_from_script();
+    // Codegen writes unconditionally. Preserve source mtimes when only build
+    // metadata changed, so Flutter does not see modified inputs mid-build.
+    for name in ["archive.rs", "journey.rs", "mod.rs"] {
+        write_if_changed(
+            &Path::new("src/protos").join(name),
+            &fs::read(proto_out.join(name)).unwrap(),
+        );
+    }
 
     // Check and create necessary dependency files
     check_and_create_file(

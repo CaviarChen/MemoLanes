@@ -1,0 +1,4 @@
+[build]
+# Flutter's iOS build recursively clears xattrs under app/. Keep the ordinary
+# Cargo/codegen cache outside that tree; Native Assets supplies its own target-dir.
+target-dir = "../../.build-cache/rust"
