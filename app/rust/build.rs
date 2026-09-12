@@ -48,20 +48,14 @@ fn load_env_file() {
 fn main() {
     load_env_file();
 
-    println!("cargo:rerun-if-env-changed=MEMOLANES_FAST_BUILD");
-    let git_hash = if env::var("MEMOLANES_FAST_BUILD").as_deref() == Ok("1") {
-        // Dart-only commits must not invalidate the native library in this mode.
-        "dev".to_owned()
-    } else {
-        // Do not track the whole .git directory: it can contain Unix sockets.
-        println!("cargo:rerun-if-changed=../../.git/HEAD");
-        println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
-        let output = Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
-            .output()
-            .expect("Failed to execute command");
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    };
+    // Do not track the whole .git directory: it can contain Unix sockets.
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .expect("Failed to execute command");
+    let git_hash = String::from_utf8(output.stdout).unwrap().trim().to_owned();
 
     println!("cargo:rerun-if-env-changed=MAPBOX-ACCESS-TOKEN");
     let mapbox_access_token = match env::var("MAPBOX-ACCESS-TOKEN").ok() {

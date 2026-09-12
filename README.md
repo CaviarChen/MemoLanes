@@ -83,16 +83,18 @@ There are two main components of this app: 1. A rust library for the core logic;
 8. Start the app via `flutter run`.
 9. `just` provides many useful commands, e.g. `just format`, `just check`, `just test`. Consider run those before opening/updating PRs.
 
-For faster local Rust iteration, set `hooks.user_defines.memolanes.rust_build_mode`
-in `app/pubspec.yaml` to `dev`, then run `flutter run` as usual. This uses basic
-Rust optimization, incremental compilation, and a fixed `dev` commit label so
-Dart-only Git commits do not rebuild Rust. The first build warms a separate dev
-cache. Restore `release` before release builds or performance testing: this
-setting is independent of Flutter's `--debug` / `--release` flags.
+Keep using `flutter run` normally. Android enables Gradle's local build cache
+and parallel task execution. Rust Native Assets always use the existing release
+compilation settings; there is no separate development-mode switch.
 
-Ordinary Cargo commands run from `app/rust` store their cache in
-`.build-cache/rust` at the repository root, outside Flutter's recursive iOS
-extended-attribute cleanup. Existing `app/rust/target` can be moved there (while
-no Rust build is running) to reuse its cache. Native Assets keeps its own cache.
+Ordinary Cargo commands store their cache in `.build-cache/rust` at the repository
+root, outside Flutter's recursive iOS extended-attribute cleanup. The root Cargo
+config also applies when using `--manifest-path` from the repository root or
+`app/`. Existing `app/rust/target` can be moved there while no Rust build is
+running and the destination does not already exist. Native Assets keeps its own
+cache. Explicit `--target-dir` / `CARGO_TARGET_DIR` overrides take precedence.
 For Dart-only changes, keep `flutter run` open and use hot reload/restart; the
 full `just pre-build` is only needed when its generated inputs change.
+
+See [build performance measurements](docs/build-performance.md) for benchmarks
+and release-artifact verification.

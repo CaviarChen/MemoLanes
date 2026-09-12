@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "app/**"
+      - ".cargo/**"
       - "tools/geo_rasterizer/**"
       - ".github/workflows/app.yml"
   push:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - "app/**"
+      - ".cargo/**"
       - "tools/geo_rasterizer/**"
       - ".github/workflows/app.yml"
   workflow_dispatch:
@@ -24,6 +26,10 @@ permissions:
 jobs:
   build_and_test:
     runs-on: ubuntu-latest
+
+    # Keep the existing per-directory CI caches; local Cargo uses .build-cache/.
+    env:
+      CARGO_TARGET_DIR: target
 
     defaults:
       run:
@@ -64,6 +70,8 @@ jobs:
             app/rust/geo_data_format/
             app/journey_kernel/
             tools/geo_rasterizer/
+          # Commands invoked from app/ with --manifest-path also use app/target.
+          cache-directories: app/target
 
       - uses: cargo-bins/cargo-binstall@main
 

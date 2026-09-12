@@ -1,0 +1,5 @@
+[build]
+# Flutter iOS recursively clears xattrs under app/. Keep ordinary Cargo caches
+# outside it. A root-level config also covers --manifest-path from the repo root.
+# Native Assets supplies its own --target-dir, which takes precedence.
+target-dir = ".build-cache/rust"

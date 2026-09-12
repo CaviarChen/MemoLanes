@@ -8,12 +8,6 @@ edition = "2021"
 name = "memolanes_core"
 crate-type = ["lib", "cdylib", "staticlib"]
 
-# Keep basic optimization for map processing while enabling fast local rebuilds.
-[profile.dev]
-opt-level = 1
-debug = "line-tables-only"
-incremental = true
-
 [dependencies]
 journey_kernel = { path = "../journey_kernel" }
 geo_data_format = { path = "geo_data_format" }

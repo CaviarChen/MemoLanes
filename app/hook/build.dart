@@ -10,6 +10,7 @@ void main(List<String> args) async {
     // Track these explicitly so profile/dependency changes invalidate the hook.
     output.dependencies.addAll([
       for (final file in [
+        '../.cargo/config.toml',
         'rust/Cargo.toml',
         'rust/Cargo.lock',
         'rust/rust-toolchain.toml',
@@ -18,13 +19,6 @@ void main(List<String> args) async {
       ])
         input.packageRoot.resolve(file),
     ]);
-    final buildMode = switch (input.userDefines['rust_build_mode']) {
-      null || 'release' => FlutterRustBridgeBuildMode.release,
-      'dev' => FlutterRustBridgeBuildMode.debug,
-      final value => throw ArgumentError(
-        'rust_build_mode must be release or dev, got $value.',
-      ),
-    };
     final cargoEnvironmentVariables = await _cargoEnvironmentVariablesFor(
       input: input,
       output: output,
@@ -32,13 +26,10 @@ void main(List<String> args) async {
 
     await FlutterRustBridgeNativeAssetsBuilder(
       cratePath: 'rust',
-      buildMode: buildMode,
-      extraCargoEnvironmentVariables: {
-        ...cargoEnvironmentVariables,
-        'MEMOLANES_FAST_BUILD': buildMode == FlutterRustBridgeBuildMode.debug
-            ? '1'
-            : '0',
-      },
+      // Native Assets does not inherit Flutter's build mode. Keep the existing
+      // release compilation for every Flutter build without a manual toggle.
+      buildMode: FlutterRustBridgeBuildMode.release,
+      extraCargoEnvironmentVariables: cargoEnvironmentVariables,
     ).run(input: input, output: output);
   });
 }
